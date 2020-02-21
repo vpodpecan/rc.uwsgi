@@ -1,0 +1,129 @@
+#!/bin/sh
+#
+# uWSGI emperor control script.
+# Written for Slackware Linux by Vid Podpecan <vid.podpecan@ijs.si>
+# Requires uWSGI >= 1.9.17 (because of master FIFO)
+#
+# License: GPL-3.0-or-later
+
+BIN=/usr/bin/uwsgi
+VASSALS_DIR=/etc/uwsgi/vassals
+USER=www-data
+GROUP=www-data
+MASTERFIFO=/tmp/uwsgi.fifo
+EMPEROR_PIDFILE=/tmp/uwsgi-emperor.pid
+LOGFILE=/var/log/uwsgi-emperor.log
+
+
+uwsgi_start() {
+  # sanity checks
+  if [[ `id -u "$USER" > /dev/null 2>&1; echo $?` -gt 0 ]]; then
+    echo "User "$USER" does not exist. Abort."
+    exit 1
+  fi
+
+  if [[ `getent group "$GROUP" > /dev/null; echo $?` -ne 0 ]]; then
+    echo "Group "$GROUP" does not exist. Abort."
+    exit 1
+  fi
+
+  if [[ ! -d "$VASSALS_DIR" ]]; then
+    echo "Vassal dir "$VASSALS_DIR" does not exist. Abort."
+    exit 1
+  fi
+
+  if [[ ! -x "$BIN" ]]; then
+    echo "uWSGI binary "$BIN" is not executable. Abort."
+    exit 1
+  fi
+
+  if [[ `is_running` -eq 1 ]]; then
+    echo "uWSGI is already running."
+    exit 1
+  elif [[ -f "$EMPEROR_PIDFILE" ]] && [[ `pgrep -x "uwsgi" -G "$GROUP" -U "$USER" > /dev/null;echo $?` -ne 0 ]] ; then
+    echo "Removing stale PID file "$EMPEROR_PIDFILE" ..."
+    rm "$EMPEROR_PIDFILE"
+  fi
+
+  if [[ -f "$MASTERFIFO" ]]; then
+    echo "Removing stale master FIFO "$MASTERFIFO" ..."
+    rm "$MASTERFIFO"
+  fi
+
+  echo "Starting uWSGI..."
+  $BIN --master-fifo "$MASTERFIFO" --emperor-pidfile "$EMPEROR_PIDFILE" --emperor "$VASSALS_DIR" --uid "$USER" --gid "$GROUP" --daemonize "$LOGFILE" --master
+}
+
+
+uwsgi_term() {
+  if [[ `is_running` -eq 1 ]]; then
+    echo "Stopping uWSGI brutally..."
+    echo Q > $MASTERFIFO
+  else
+    echo "uWSGI is not running."
+  fi
+}
+
+uwsgi_stop() {
+  if [[ `is_running` -eq 1 ]]; then
+    echo "Stopping uWSGI gracefully..."
+    echo q > $MASTERFIFO
+  else
+    echo "uWSGI is not running."
+  fi
+}
+
+uwsgi_restart() {
+  uwsgi_stop
+  sleep 5
+  uwsgi_start
+}
+
+uwsgi_reload() {
+  if [[ `is_running` -eq 1 ]]; then
+    echo "Reloading uWSGI gracefully..."
+    echo r > $MASTERFIFO
+  else
+    echo "uWSGI is not running."
+  fi
+}
+
+uwsgi_status() {
+  if [[ `is_running` -eq 1 ]]; then
+    echo "uWSGI is running."
+  else
+    echo "uWSGI is not running."
+  fi
+}
+
+is_running() {
+  local running=0
+  if [[ -f "$EMPEROR_PIDFILE" ]] && [[ `pgrep -x "uwsgi" -G "$GROUP" -U "$USER" > /dev/null;echo $?` -eq 0 ]]; then
+    running=1
+  fi
+  echo $running
+}
+
+
+case "$1" in
+  start)
+    uwsgi_start
+    ;;
+  terminate)
+    uwsgi_term
+    ;;
+  stop)
+    uwsgi_stop
+    ;;
+  restart)
+    uwsgi_restart
+    ;;
+  reload)
+    uwsgi_reload
+    ;;
+  status)
+    uwsgi_status
+    ;;
+  *)
+  echo "usage: `basename $0` {start|terminate|stop|restart|reload|status}"
+esac
